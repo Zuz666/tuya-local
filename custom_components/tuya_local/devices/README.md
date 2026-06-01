@@ -696,7 +696,7 @@ Humidifer can also cover dehumidifiers (use class to specify which).
 
 ### `light`
 - **switch** (optional, boolean): a dp to control the on/off state of the light
-- **brightness** (optional, number): a dp to control the dimmer if available.  If a range is provided, the value will be automatically scaled into the 0-255 range for HA, so there is no need to provide a scale. If there is a fixed list of mappings, the values should be between 0 (off) and 255 (full brightness). If there is no switch dp, a brightness of 0 will be sent to turn the light off.
+- **brightness** (optional, number): a dp to control the dimmer if available. See **Light brightness ranges** below for details on range conversion and on/off handling.
 - **color_temp** (optional, number): a dp to control the color temperature if available. See `target_range` above for mapping Tuya's range into Kelvin.
 - **rgbhsv** (optional, hex): a dp to control the color of the light, using encoded RGB and HSV values. The `format` field names recognized for decoding this field are `r`, `g`, `b`, `h`, `s`, `v`. If both RGB and HSV values are supplied by the light, the HSV will be preferred. Either RGB values or HS values are required. If V is missing, the brightness dp is required.
 - **named_color** (optional, string): a dp to control the color of the light, using a list of named colors. This is mutually exclusive with the rgbhsv dp. The list of recognised colors is from the HA COLORS table at https://github.com/home-assistant/core/blob/dev/homeassistant/util/color.py
@@ -707,6 +707,80 @@ Humidifer can also cover dehumidifiers (use class to specify which).
     calculated based on which of the above dps are available.
 - **effect** (optional, mapping of strings): a dp to control effects / presets supported by the light.
    Note: If the light mixes in color modes in the same dp, `color_mode` should be used instead. If the light contains both a separate dp for effects/scenes/presets and a mix of color_modes and effects (commonly scene and music) in the `color_mode` dp, then a separate select entity should be used for the dedicated dp to ensure the effects from `color_mode` are selectable. If there is no (or read-only) switch and no brightness dp, then the "off" effect will be used to turn off the light, and a default option should be marked for turning on the light with no parameters.
+
+#### Light brightness ranges
+
+Home Assistant represents light brightness as an integer from 0 to 255, where
+0 is off and 255 is full brightness. Tuya devices may use a different numeric
+range for their brightness dp, for example 0..100, 0..1000, 1..1000 or
+10..1000.
+
+If a `range` is provided for a light `brightness` dp, tuya-local scales between
+the Tuya range and the Home Assistant 0..255 brightness range. Do not add a
+`scale` for this case. If brightness is represented by a fixed list of
+`mapping` values instead of a numeric `range`, the mapped Home Assistant values
+should be between 0 (off) and 255 (full brightness).
+
+The `range` describes the numeric values accepted by the Tuya brightness dp. It
+does not, by itself, say whether the lower bound is a visible brightness level
+or a value that means off. The on/off model depends on which dps are present:
+
+- If the light has a writable `switch` dp, that dp controls the on/off state.
+  Turning the light off writes the switch dp to false. The brightness dp then
+  controls brightness while the light is on.
+- If the light has no writable `switch` dp but has a `brightness` dp, tuya-local
+  uses the brightness dp for on/off. Turning the light off writes brightness 0.
+  The light is considered on only when the reported Home Assistant brightness is
+  greater than 0.
+- If the light has neither a writable `switch` dp nor a `brightness` dp, an
+  `effect` value of `off` can be used as the off state when the device provides
+  one.
+
+For brightness dps with a range whose minimum is greater than 0, the lowest
+non-zero Home Assistant brightness is converted to the configured range minimum.
+This keeps the device minimum reachable:
+
+```text
+range 1..1000:
+HA brightness 0   -> turn off
+HA brightness 1   -> DP 1
+HA brightness 255 -> DP 1000
+
+range 10..1000:
+HA brightness 0   -> turn off
+HA brightness 1   -> DP 10
+HA brightness 255 -> DP 1000
+```
+
+For brightness-only lights whose range starts at 0, brightness 0 is also used
+as the off value. In that model, the range includes both the off value and the
+brightness values:
+
+```text
+DP 0      -> off / HA brightness 0
+DP 1..max -> brightness while on
+```
+
+Current conversion still uses the configured numeric range for writes. This
+means the first non-off DP value is not always reachable from HA brightness 1
+when the range starts at 0:
+
+```text
+range 0..100, no switch dp:
+DP 0 is read as HA brightness 0 and the light is considered off.
+HA brightness 1 writes DP 0 after conversion and rounding.
+
+range 0..1000, no switch dp:
+DP 0 is read as HA brightness 0 and the light is considered off.
+HA brightness 1 writes DP 3 after conversion and rounding, so DP 1 and DP 2
+are skipped by the HA brightness slider.
+```
+
+These zero-based range examples describe the current behavior. They should not
+be interpreted as a recommendation to use 0 as both an off value and a
+brightness value. When documenting or adding a device, check whether the device
+has a separate switch dp and whether brightness DP 0 means off or a real
+minimum brightness level.
 
 ### `lock`
 
